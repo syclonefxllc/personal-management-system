@@ -10,6 +10,8 @@ namespace App\Controller\Utils;
 
 
 use App\Entity\Modules\Contacts\MyContact;
+use App\Entity\Modules\Goals\MyGoals;
+use App\Entity\Modules\Notes\MyNotes;
 use App\Repository\FilesSearchRepository;
 use App\Repository\FilesTagsRepository;
 use App\Repository\Modules\Achievements\AchievementRepository;
@@ -46,10 +48,12 @@ use App\Services\Exceptions\ExceptionRepository;
 use App\Services\Translator;
 use Doctrine\DBAL\Exception\ForeignKeyConstraintViolationException;
 use Doctrine\ORM\EntityManagerInterface;
+use Doctrine\ORM\PersistentCollection;
 use Exception;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Annotation\Route;
 
 class Repositories extends AbstractController {
@@ -93,6 +97,12 @@ class Repositories extends AbstractController {
     const PASSWORD_FIELD        = 'password';
 
     const KEY_MESSAGE           = "message";
+
+    const KEY_CLASS_META_RELATED_ENTITY_FIELD_NAME    = "fieldName";
+    const KEY_CLASS_META_RELATED_ENTITY_MAPPED_BY     = "mappedBy";
+    const KEY_CLASS_META_RELATED_ENTITY_TARGET_ENTITY = "targetEntity";
+
+    const ENTITY_PROPERTY_DELETED = "deleted";
 
     /**
      * @var EntityManagerInterface $entity_manager
@@ -335,48 +345,30 @@ class Repositories extends AbstractController {
      * @param $id
      * This is general method for all common record soft delete called from front
      * @param array $findByParams
-     * @return JsonResponse
+     * @param Request|null $request
+     * @return Response
      * @throws ExceptionDuplicatedTranslationKey
      */
-    public function deleteById(string $repository_name, $id, array $findByParams = []) {
+    public function deleteById(string $repository_name, $id, array $findByParams = [], ?Request $request = null ) {
         try {
 
             $id         = $this->trimAndCheckId($id);
             $repository = $this->{lcfirst($repository_name)};
             $record     = $repository->find($id);
 
-            if ($this->hasChildren($record, $repository)) {
-                $response_data = [
-                    self::KEY_MESSAGE => $this->translator->translate('exceptions.repositories.recordHasChildrenCannotRemove'),
-                ];
-                return new JsonResponse($response_data, 500);
-            }
+            if ( $this->hasActiveSoftDeleteRelatedEntities($record, $repository) ) {
+                $message = $this->translator->translate('exceptions.repositories.recordHasChildrenCannotRemove');
 
-            #Info: this is used to detected constraint violation so it will prevent also soft delete
-            $isConstraintViolation = false;
-            $this->entity_manager->beginTransaction();
-            {
-                try{
-                    $this->entity_manager->remove($record);
-                    $this->entity_manager->flush();
-                }catch(ForeignKeyConstraintViolationException $e){
-                    $isConstraintViolation = true;
+                if( !empty($request) ){
+                    return AjaxResponse::buildResponseForAjaxCall(500, $message);
                 }
+
+                return new Response($message, 500);
             }
-            $this->entity_manager->rollback();
 
             #Info: Reattach the entity - doctrine based issue
             $this->entity_manager->clear();
             $record = $repository->find($id);
-
-            if( $isConstraintViolation )
-            {
-                $message = $this->translator->translate('db.foreignKeyViolation');
-                $response_data = [
-                    self::KEY_MESSAGE => $message,
-                ];
-                return new JsonResponse($response_data, 500);
-            }
 
             $record->setDeleted(1);
             $record = $this->changeRecordData($repository_name, $record);
@@ -386,15 +378,21 @@ class Repositories extends AbstractController {
             $em->persist($record);
             $em->flush();
 
-            $response_data = [
-                self::KEY_MESSAGE => $this->translator->translate('responses.repositories.recordDeletedSuccessfully'),
-            ];
-            return new JsonResponse($response_data, 200);
+            $message = $this->translator->translate('responses.repositories.recordDeletedSuccessfully');
+
+            if( !empty($request) ){
+                return AjaxResponse::buildResponseForAjaxCall(200, $message);
+            }
+
+            return new Response($message, 200);
         } catch (Exception | ExceptionRepository $er) {
-            $response_data = [
-                self::KEY_MESSAGE => $this->translator->translate('responses.repositories.couldNotDeleteRecord'),
-            ];
-            return new JsonResponse($response_data, 500);
+            $message = $this->translator->translate('responses.repositories.couldNotDeleteRecord');
+
+            if( !empty($request) ){
+                return AjaxResponse::buildResponseForAjaxCall(500, $message);
+            }
+
+            return new Response($message, 500);
         }
     }
 
@@ -525,24 +523,73 @@ class Repositories extends AbstractController {
         return $entity;
     }
 
-    private function hasChildren($record, $repository) {
+    /**
+     * @param $record
+     * @param $repository
+     * @return bool
+     */
+    private function hasActiveSoftDeleteRelatedEntities($record, $repository): bool {
+
+        # First thing is that some tables have relation to self without foreign key - this must be checked separately
         $parent_keys = ['parent', 'parent_id', 'parentId', 'parentID'];
-        $result = false;
 
         foreach ($parent_keys as $key) {
 
             if (property_exists($record, $key)) {
-                $child_record = $repository->findBy([$key => $record->getId(), 'deleted' => 0]);
+                $child_record = $repository->findBy([$key => $record->getId(), self::ENTITY_PROPERTY_DELETED => 0]);
             }
 
             if (isset($child_record) && !empty($child_record)) {
-                $result = true;
-                break;
+                return true;
             }
 
         }
 
-        return $result;
+        # Second thing - check the real relations
+        $class_name = get_class($record);
+        $this->entity_manager->clear($class_name);
+
+        $class_meta = $this->entity_manager->getClassMetadata($class_name);
+        $related_entities_classes_data_arrays = $class_meta->getAssociationMappings();
+
+        foreach( $related_entities_classes_data_arrays as $related_entity_class_data_array ){
+
+            $field_name = $related_entity_class_data_array[Repositories::KEY_CLASS_META_RELATED_ENTITY_FIELD_NAME];
+            $get_method = "get" . ucfirst($field_name);
+
+            $related_records_data = $record->{$get_method}();
+
+            // if LazyLoaded then we got to get the values otherwise we got related entities
+            if( $related_records_data instanceof PersistentCollection ){
+                /**
+                 * @var PersistentCollection $related_entities_persistent_collections
+                 */
+                $related_entities = $related_records_data->getValues();
+            }else{
+                $related_entities = $related_records_data;
+            }
+
+            // when relation 1:n
+            if( !is_array($related_entities) ){
+                $related_entities = [$related_entities];
+            }
+
+            foreach( $related_entities as $related_entity ){
+
+                $property_name      = self::ENTITY_PROPERTY_DELETED;
+                $delete_method_name = "get" . ucfirst(self::ENTITY_PROPERTY_DELETED);
+
+                if( property_exists($related_entity, $property_name) ){
+                    $is_deleted = $related_entity->$delete_method_name();
+
+                    if( !$is_deleted ){
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 
     public static function removeHelperColumnsFromView(array &$columns_names) {
@@ -613,5 +660,11 @@ class Repositories extends AbstractController {
         }
 
         return $record;
+    }
+
+    private function findEager($id, $record){
+
+
+
     }
 }

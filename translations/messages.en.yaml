@@ -1,0 +1,16 @@
+messages:
+  SettingValidationDTO:
+    success: "Validation has been passed"
+    failure:
+      duplicatedValue: "Duplicated value has been found for given key: "
+      exceptionWaThrown: "Exception was thrown with message"
+  ajax:
+    success:
+      recordHasBeenCreated: "Record has been created"
+      recordHasBeenRemoved: "Record has been removed"
+    failure:
+      duplicatedRecord: "Duplicated record"
+      formValidationFailed: "Form validation failed"
+      internalServerError: "Internal server error"
+      undefinedError: "Undefined error"
+      couldNotRemoveRecord: "Could not remove record"

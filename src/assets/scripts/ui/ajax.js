@@ -18,6 +18,9 @@ export default (function () {
         init: function(){
             this.attachModuleContentLoadingViaAjaxOnMenuLinks();
         },
+        entireMenuReload: function(){
+
+        },
         singleMenuNodeReload: function(menuNodeModuleName, returnNotification = false) {
 
             let menuNode = $('.sidebar-menu-node-element[data-menu-node-name^="' + menuNodeModuleName + '"]');
@@ -110,9 +113,12 @@ export default (function () {
 
         },
         /**
-         * This method will fetch module template and load it into mainBody
+         * @param url           {string}
+         * @param callbackAfter {function}
+         * @param showMessages  {boolean}
+         * @description This method will fetch module template and load it into mainBody, not showing message here on purpose
          */
-        loadModuleContentByUrl: function (url){
+        loadModuleContentByUrl: function (url, callbackAfter = undefined, showMessages = false){
 
             ui.widgets.loader.showLoader();
 
@@ -120,9 +126,27 @@ export default (function () {
                 url: url,
                 method: "GET",
             }).always((data) => {
-
                 let twigBodySection = $('.twig-body-section');
-                twigBodySection.html(data);
+
+                try{
+                    var code     = data['code'];
+                    var message  = data['message'];
+                    var template = data['template'];
+                } catch(Exception){
+                    throw({
+                        "message"   : "Could not handle ajax call",
+                        "data"      : data,
+                        "exception" : Exception
+                    })
+                }
+
+                if( "undefined" !== typeof template ){
+                    twigBodySection.html(template);
+                }
+
+                if( "function" === typeof callbackAfter ){
+                    callbackAfter();
+                }
 
                 /**
                  * Despite this being called imagesLoaded it works fine with normal content as well

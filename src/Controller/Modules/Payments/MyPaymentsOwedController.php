@@ -2,9 +2,11 @@
 
 namespace App\Controller\Modules\Payments;
 
+use App\Controller\Utils\AjaxResponse;
 use App\Controller\Utils\Application;
 use App\Controller\Utils\Repositories;
 use Doctrine\DBAL\DBALException;
+use Exception;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -37,13 +39,16 @@ class MyPaymentsOwedController extends AbstractController
         if (!$request->isXmlHttpRequest()) {
             return $this->renderTemplate(false);
         }
-        return $this->renderTemplate(true);
+
+        $template_content  = $this->renderTemplate(true)->getContent();
+        return AjaxResponse::buildResponseForAjaxCall(200, "", $template_content);
     }
 
     /**
      * @param bool $ajax_render
      * @return Response
      * @throws DBALException
+     * @throws Exception
      */
     protected function renderTemplate($ajax_render = false) {
 
@@ -60,6 +65,23 @@ class MyPaymentsOwedController extends AbstractController
 
         $summary_owed_by_others = $this->app->repositories->myPaymentsOwedRepository->getMoneyOwedSummaryForTargetsAndOwningSide(0);
         $summary_owed_by_me     = $this->app->repositories->myPaymentsOwedRepository->getMoneyOwedSummaryForTargetsAndOwningSide(1);
+        $summary_overall        = $this->app->repositories->myPaymentsOwedRepository->fetchSummaryWhoOwesHowMuch();
+
+        $summary_overall_owed_by_me     = [];
+        $summary_overall_owed_by_others = [];
+
+        foreach( $summary_overall as $summary ){
+            $owed_by_me = $summary['summaryOwedByMe'];
+
+            if($owed_by_me){
+                $summary_overall_owed_by_me[] = $summary;
+                continue;
+            }
+
+            $summary_overall_owed_by_others[] = $summary;
+        }
+
+        $currencies_dtos = $this->app->settings->settings_loader->getCurrenciesDtosForSettingsFinances();
 
         return $this->render('modules/my-payments/owed.html.twig', [
             'ajax_render'       => $ajax_render,
@@ -68,6 +90,9 @@ class MyPaymentsOwedController extends AbstractController
             'owed_by_others'    => $owed_by_others,
             'summary_owed_by_others' => $summary_owed_by_others,
             'summary_owed_by_me'     => $summary_owed_by_me,
+            'currencies_dtos'        => $currencies_dtos,
+            'summary_overall_owed_by_me'     => $summary_overall_owed_by_me,
+            'summary_overall_owed_by_others' => $summary_overall_owed_by_others,
         ]);
     }
 
@@ -91,7 +116,7 @@ class MyPaymentsOwedController extends AbstractController
      * @Route("/my-payments-owed/remove/", name="my-payments-owed-remove")
      * @param Request $request
      * @return Response
-     * @throws \Exception
+     * @throws Exception
      */
     public function remove(Request $request) {
 
@@ -100,10 +125,15 @@ class MyPaymentsOwedController extends AbstractController
             $request->request->get('id')
         );
 
+        $message = $response->getContent();
+
         if ($response->getStatusCode() == 200) {
-            return $this->renderTemplate(true);
+            $rendered_template = $this->renderTemplate(true);
+            $template_content  = $rendered_template->getContent();
+
+            return AjaxResponse::buildResponseForAjaxCall(200, $message, $template_content);
         }
-        return $response;
+        return AjaxResponse::buildResponseForAjaxCall(500, $message);
     }
 
     /**

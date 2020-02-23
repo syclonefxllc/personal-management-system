@@ -6,6 +6,7 @@ use Doctrine\ORM\Mapping as ORM;
 
 /**
  * @ORM\Entity(repositoryClass="App\Repository\Modules\Payments\MyPaymentsOwedRepository")
+ * @ORM\Table(name="my_payment_owed")
  */
 class MyPaymentsOwed
 {
@@ -45,6 +46,11 @@ class MyPaymentsOwed
      * @ORM\Column(type="boolean")
      */
     private $owedByMe = 0;
+
+    /**
+     * @ORM\Column(type="string", length=255)
+     */
+    private $currency = "PLN";
 
     public function getId(): ?int
     {
@@ -127,5 +133,19 @@ class MyPaymentsOwed
         $this->owedByMe = $owedByMe;
 
         return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getCurrency() {
+        return $this->currency;
+    }
+
+    /**
+     * @param mixed $currency
+     */
+    public function setCurrency($currency): void {
+        $this->currency = $currency;
     }
 }

@@ -164,38 +164,53 @@ export default (function () {
                 let url   = this.methods.removeEntity.url.replace(this.methods.removeEntity.params.repositoryName, repositoryName);
                 url       = url.replace(this.methods.removeEntity.params.id, entityId);
 
-                let message = this.messages.doYouWantToRemoveThisRecord();
+                let doYouWantToRemoveThisRecordMessage = this.messages.doYouWantToRemoveThisRecord();
 
                 bootbox.confirm({
-                    message:  message,
+                    message:  doYouWantToRemoveThisRecordMessage,
                     backdrop: true,
                     callback: function (result) {
                         if (result) {
-                            ui.widgets.loader.toggleLoader();
+                            ui.widgets.loader.showLoader();
 
                             $.ajax({
                                 url: url,
                                 method: _this.methods.removeEntity.method,
-                            }).fail((data) => {
-                                let message = _this.messages.couldNotRemoveEntityFromRepository(repositoryName);
-                                let type    = _this.messages.colors.red;
-                                bootstrap_notifications.notify(message, type)
-                            }).done((data) => {
-                                if( "function" === typeof afterRemovalCallback ){
+                            }).always((data) => {
+
+                                ui.widgets.loader.hideLoader();
+
+                                try{
+                                    var code    = data['code'];
+                                    var message = data['message'];
+                                } catch(Exception){
+                                    throw({
+                                        "message"   : "Could not handle ajax call",
+                                        "data"      : data,
+                                        "exception" : Exception
+                                    })
+                                }
+
+                                if( 200 != code ){
+                                    bootstrap_notifications.showRedNotification(message);
+                                    return;
+                                }else {
+
+                                    if( "undefined" === typeof message ){
+                                        message = _this.messages.entityHasBeenRemovedFromRepository();
+                                    }
+
+                                    bootstrap_notifications.showGreenNotification(message);
+                                }
+
+                                if( "function" === typeof afterRemovalCallback ) {
                                     afterRemovalCallback();
                                 }
 
-                                let message = _this.messages.entityHasBeenRemovedFromRepository();
-                                let type    = _this.messages.colors.green;
-                                bootstrap_notifications.notify(message, type)
-                            }).always((data) => {
-                                ui.widgets.loader.toggleLoader();
                             });
-
                         }
                     }
                 });
-
             },
             /**
              * Editing is based on modal
@@ -259,8 +274,11 @@ export default (function () {
          * These are all for datatables
          */
         attachRemovingEventOnTrashIcon: function () {
-            let _this = this;
-            $('.fa-trash').click(function () { //todo: change selector for action...something
+            let _this        = this;
+            let removeButton = $('.remove-record');
+
+            $(removeButton).off('click'); // to prevent double attachement on reinit
+            $(removeButton).click(function () {
                 let parent_wrapper    = $(this).closest(_this.elements["removed-element-class"]);
                 let param_entity_name = $(parent_wrapper).attr('data-type');
                 let remove_data       = dataProcessors.entities[param_entity_name].makeRemoveData(parent_wrapper);
@@ -276,40 +294,55 @@ export default (function () {
                     backdrop: true,
                     callback: function (result) {
                         if (result) {
-                            ui.widgets.loader.toggleLoader();
+                            ui.widgets.loader.showLoader();
                             $.ajax({
                                 url: remove_data.url,
                                 method: 'POST',
-                                data: remove_data.data,
-                                success: (template) => {
-                                    bootstrap_notifications.notify(remove_data.success_message, 'success');
-                                    let table_id = $(parent_wrapper).closest('tbody').closest('table').attr('id');
-                                    if (remove_data['is_dataTable']) {
-                                        _this.removeDataTableTableRow(table_id, parent_wrapper);
-                                        return;
-                                    }
-                                    _this.removeTableRow(parent_wrapper);
+                                data: remove_data.data
+                            }).always( (data) => {
 
-                                    $('.twig-body-section').html(template);
-                                    initializer.reinitialize();
-                                },
-                            }).fail((data) => {
+                                ui.widgets.loader.hideLoader();
 
-                                let message  = remove_data.fail_message;
-                                let response = data.responseJSON;
+                                // Refactor start
+                                let $twigBodySection = $('.twig-body-section');
 
-                                if(
-                                        "object" === typeof response
-                                    &&  remove_data.use_ajax_fail_message
-                                    &&  "undefined" !== typeof response.message
-                                )
-                                {
-                                    message = response.message;
+                                try{
+                                    var code     = data['code'];
+                                    var message  = data['message'];
+                                    var template = data['template'];
+                                } catch(Exception){
+                                    throw({
+                                        "message"   : "Could not handle ajax call",
+                                        "data"      : data,
+                                        "exception" : Exception
+                                    })
                                 }
 
-                                bootstrap_notifications.notify(message, 'danger')
-                            }).always(() => {
-                                ui.widgets.loader.toggleLoader();
+                                if( "undefined" === typeof message ){
+                                    message = remove_data.success_message;
+                                }
+
+                                if (remove_data.callback_after) {
+                                    remove_data.callback();
+                                }
+
+                                if( 200 != code ) {
+                                    bootstrap_notifications.showRedNotification(message);
+                                    return;
+                                }
+
+                                if( "undefined" !== typeof template ){
+                                    $twigBodySection.html(template);
+                                    initializer.reinitialize();
+                                }else if ( remove_data['is_dataTable'] ) {
+                                    let table_id = $(parent_wrapper).closest('tbody').closest('table').attr('id');
+                                    _this.removeDataTableTableRow(table_id, parent_wrapper);
+                                }else{
+                                    _this.removeTableRow(parent_wrapper);
+                                }
+
+                                bootstrap_notifications.showGreenNotification(message);
+
                             });
                         }
                     }
@@ -318,14 +351,17 @@ export default (function () {
             });
         },
         attachContentEditEventOnEditIcon: function () {
-            let _this = this;
-            $('.fa-edit').click(function () { //todo: change selector for action...something
+            let _this      = this;
+            let editButton = $('.edit-record');
+
+            $(editButton).off('click'); // to prevent double attachement on reinit
+            $(editButton).click(function () {
                 let closest_parent = this.closest(_this.elements["edited-element-class"]);
                 _this.toggleContentEditable(closest_parent);
             });
         },
         attachContentCopyEventOnCopyIcon: function () {
-            let allCopyButtons = $('.fa-copy'); //todo: change selector for action...something
+            let allCopyButtons = $('.copy-record');
             let _this = this;
 
             if ($(allCopyButtons).length > 0) {
@@ -339,25 +375,43 @@ export default (function () {
 
                         let temporaryCopyDataInput = $("<input>");
                         $("body").append(temporaryCopyDataInput);
-                        /* Or use this to get directly content by html attributes
-                            let selectorOfTargetElement = $(clickedElement).attr('data-copy-from-selector');
-                            let targetElement = $(selectorOfTargetElement);
-                         */
-                        ui.widgets.loader.toggleLoader();
+                        ui.widgets.loader.showLoader();
                         $.ajax({
                             url: copy_data.url,
                             method: 'GET',
-                            success: (data) => {
-                                temporaryCopyDataInput.val(data).select();
-                                document.execCommand("copy");
-                                temporaryCopyDataInput.remove();
+                        }).always((data) => {
+                            ui.widgets.loader.hideLoader();
 
-                                bootstrap_notifications.notify(copy_data.success_message, 'success')
-                            },
-                        }).fail(() => {
-                            bootstrap_notifications.notify(update_data.fail_message, 'danger')
-                        }).always(() => {
-                            ui.widgets.loader.toggleLoader();
+                            try{
+                                var message  = data['message'];
+                                var password = data['password'];
+                            } catch(Exception){
+                                throw({
+                                    "message"   : "Could not handle ajax call",
+                                    "data"      : data,
+                                    "exception" : Exception
+                                })
+                            }
+
+                            if(
+                                    ""          !== message
+                                &&  "undefined" !== typeof  message
+                            ){
+                                bootstrap_notifications.showRedNotification(message);
+                                return;
+                            }
+
+                            if( "undefined" === typeof password ){
+                                bootstrap_notifications.showRedNotification(copy_data.fail_message);
+                                return;
+                            }
+
+                            temporaryCopyDataInput.val(password).select();
+                            document.execCommand("copy");
+                            temporaryCopyDataInput.remove();
+
+                            bootstrap_notifications.showGreenNotification(copy_data.success_message);
+
                         });
 
                     })
@@ -368,10 +422,10 @@ export default (function () {
         },
         attachContentSaveEventOnSaveIcon: function () {
             let _this      = this;
-            let saveButton = $('.fa-save');
+            let saveButton = $('.save-record');
 
             $(saveButton).off('click'); // to prevent double attachement on reinit
-            $(saveButton).on('click', function () { //todo: change selector for action...something
+            $(saveButton).on('click', function () {
                 let closest_parent = this.closest(_this.elements["saved-element-class"]);
                 _this.ajaxUpdateDatabaseRecord(closest_parent);
             });
@@ -384,7 +438,7 @@ export default (function () {
                 $(input).addClass(this.classes["fontawesome-picker-input"] + index);
             });
 
-            $('.fa-smile').each((index, icon) => {
+            $('.action-fontawesome').each((index, icon) => {
 
                 if ($('.' + _this.classes["fontawesome-picker-preview"]).length === 0) {
                     let fontawesome_preview_div = $('<div></div>');
@@ -424,8 +478,7 @@ export default (function () {
                 // with this there is a possibility to load different template than the one from url used in ajax
                 // normally the same page should be reloaded but this is helpful for widgets when we want to call
                 // action from one page but load template of other
-                let dataTemplateUrl      = $(submitButton).attr('data-template-url');
-                let dataMethod           = $(submitButton).attr('data-template-method');
+                let dataTemplateUrl = $(submitButton).attr('data-template-url');
 
                 let method      = form.attr('method');
                 let entity_name = form.attr('data-entity');
@@ -443,77 +496,78 @@ export default (function () {
                     url: create_data.url,
                     type: method,
                     data: form.serialize(),
-                }).done((template) => {
+                }).always((data) => {
 
                     if (create_data.callback_before) {
                         create_data.callback(dataCallbackParams);
+                    }
+
+                    try{
+                        var code     = data['code'];
+                        var message  = data['message'];
+                        var template = data['template'];
+                    } catch(Exception){
+                        throw({
+                            "message"   : "Could not handle ajax call",
+                            "data"      : data,
+                            "exception" : Exception
+                        })
                     }
 
                     /**
                      * This reloadPage must stay like that,
                      * Somewhere in code I call this function but i pass it as string so it's not getting detected
                      */
-
                     if (!reloadPage) {
+                        ui.widgets.loader.hideLoader();
+
+                        if( 200 != code ){
+                            bootstrap_notifications.showRedNotification(message);
+                        }else{
+                            bootstrap_notifications.showGreenNotification(message);
+                        }
+
+                        return;
+                    }
+
+                    if( 200 != code ){
+                        ui.widgets.loader.hideLoader();
+                        bootstrap_notifications.showRedNotification(message);
                         return;
                     }
 
                     if( "undefined" !== typeof dataTemplateUrl ){
-
-                        $.ajax({
-                            url: dataTemplateUrl,
-                            type: dataMethod,
-                        }).always(() => {
-                            ui.widgets.loader.hideLoader();
-                        }).fail((data) => {
-                            bootstrap_notifications.notify(data.responseText, 'danger');
-                        }).done((template) => {
-                            $('.twig-body-section').html(template);
-
-                            if(create_data.callback_for_data_template_url){
-                                create_data.callback(dataCallbackParams);
-                            }
-
-                            initializer.reinitialize();
-                        });
-
-                    }else {
-
-                        // do not attempt to reload template if this is not a template
-                        if( "undefined" !== typeof template['code'] ){
-                            return;
+                        let callback = () => {};
+                        if(create_data.callback_for_data_template_url){
+                            callback = () => {
+                                create_data.callback(dataCallbackParams)
+                            };
                         }
 
-                        $('.twig-body-section').html(template);
-                        initializer.reinitialize();
-                    }
-
-                }).fail((data) => {
-                    bootstrap_notifications.notify(data.responseText, 'danger');
-                }).always((data) => {
-                    // hide loader only when there is no other ajax executed inside
-                    if( "undefined" === typeof dataTemplateUrl ){
-                        ui.widgets.loader.hideLoader();
-                    }
-
-                    // if there is code there also must be message so i dont check it
-                    let code                = data['code'];
-                    let message             = data['message'];
-                    let notification_type   = '';
-
-                    if( undefined === code ){
-                        bootstrap_notifications.notify(create_data.success_message, 'success');
-                        return;
-                    }
-
-                    if( code === 200 ){
-                        notification_type = 'success';
+                        ui.ajax.loadModuleContentByUrl(dataTemplateUrl, callback, true);
                     }else{
-                        notification_type = 'danger';
+                        let twigBodySection = $('.twig-body-section');
+                        if( "undefined" !== template ){
+                            twigBodySection.html(template);
+                        }
                     }
 
-                    bootstrap_notifications.notify(message, notification_type);
+                    if(
+                            "undefined" === typeof message
+                        ||  ""          === message
+                    ){
+                        message = create_data.success_message;
+                    }
 
+                    if (create_data.callback_after) {
+                        create_data.callback(dataCallbackParams);
+                    }
+
+                    initializer.reinitialize();
+
+                    ui.widgets.loader.hideLoader();
+
+                    bootstrap_notifications.showGreenNotification(message);
                 });
 
                 event.preventDefault();
@@ -524,40 +578,37 @@ export default (function () {
                 let form = $(event.target);
                 let formTarget = form.attr('data-form-target');
                 let updateData = dataProcessors.singleTargets[formTarget].makeUpdateData(form);
-                ui.widgets.loader.toggleLoader();
+                ui.widgets.loader.showLoader();
                 $.ajax({
                     url: updateData.url,
                     type: 'POST',
                     data: updateData.data, //In this case the data from target_action is being sent not form directly
-                }).done((data) => {
-
-                    if( undefined !== data['template'] ){
-                        $('.twig-body-section').html(data['template']);
-                        initializer.reinitialize();
-                    }
-
-                }).fail((data) => {
-                    bootstrap_notifications.notify(data.responseText, 'danger');
                 }).always((data) => {
 
-                    // if there is code there also must be message so i dont check it
-                    let code                = data['code'];
-                    let message             = data['message'];
-                    let notification_type   = '';
+                    ui.widgets.loader.hideLoader();
 
-                    if( undefined === code ){
+                    try{
+                        var code     = data['code'];
+                        var message  = data['message'];
+                        var template = data['template'];
+                    } catch(Exception){
+                        throw({
+                            "message"   : "Could not handle ajax call",
+                            "data"      : data,
+                            "exception" : Exception
+                        })
+                    }
+
+                    if( 200 === code ){
+                        bootstrap_notifications.showGreenNotification(message);
+                    }else{
+                        bootstrap_notifications.showRedNotification(message);
                         return;
                     }
 
-                    if( code === 200 ){
-                        notification_type = 'success';
-                    }else{
-                        notification_type = 'danger';
-                    }
+                    $('.twig-body-section').html(template);
+                    initializer.reinitialize();
 
-                    bootstrap_notifications.notify(message, notification_type);
-
-                    ui.widgets.loader.toggleLoader();
                 });
 
                 event.preventDefault();
@@ -585,7 +636,7 @@ export default (function () {
             bootstrap_notifications.notify(this.messages.entityEditEnd(dataProcessors.entities[param_entity_name].entity_name), 'success');
         },
         toggleActionIconsVisibillity: function (tr_parent_element, toggle_content_editable = null, is_content_editable) {
-            let save_icon = $(tr_parent_element).find('.fa-save');
+            let save_icon = $(tr_parent_element).find('.save-record');
             let fontawesome_icon = $(tr_parent_element).find('.action-fontawesome');
 
             let action_icons = [save_icon, fontawesome_icon];
@@ -605,12 +656,13 @@ export default (function () {
         },
         toggleDisabledClassForTableRow: function (tr_parent_element) {
             let color_pickers   = $(tr_parent_element).find('.color-picker');
+            let toggle_buttons  = $(tr_parent_element).find('.toggle-button');
             let option_pickers  = $(tr_parent_element).find('.option-picker');
             let date_pickers    = $(tr_parent_element).find('.date-picker');
             let checkbox        = $(tr_parent_element).find('.checkbox-disabled');
             let selectize       = $(tr_parent_element).find('.selectize-control');
             let dataPreview     = $(tr_parent_element).find('.data-preview');
-            let elements_to_toggle = [color_pickers, option_pickers, date_pickers, checkbox, selectize, dataPreview];
+            let elements_to_toggle = [color_pickers, option_pickers, date_pickers, checkbox, selectize, dataPreview, toggle_buttons];
             let _this = this;
 
             $(elements_to_toggle).each((index, element_type) => {
@@ -658,13 +710,43 @@ export default (function () {
             $.ajax({
                 url: update_data.url,
                 method: 'POST',
-                data: update_data.data,
-                success: (data) => {
-                    bootstrap_notifications.notify(update_data.success_message, 'success');
-                },
+                data: update_data.data
             }).fail(() => {
                 bootstrap_notifications.notify(update_data.fail_message, 'danger')
-            }).always(() => {
+            }).always((data) => {
+
+                try{
+                    var code    = data['code'];
+                    var message = data['message'];
+                } catch(Exception){
+                    throw({
+                        "message"   : "Could not handle ajax call",
+                        "data"      : data,
+                        "exception" : Exception
+                    })
+                }
+
+                let messageType = "success";
+
+                if(
+                        ( "undefined" !== typeof code )
+                    &&  ( 200 != code )
+                ){
+                    messageType = "danger";
+                }
+
+                if( "undefined" === typeof message ){
+                    bootstrap_notifications.notify(update_data.success_message, messageType);
+                } else {
+                    bootstrap_notifications.notify(message, messageType);
+                }
+
+
+
+                if (update_data.callback_after) {
+                    update_data.callback();
+                }
+
                 ui.ajax.loadModuleContentByUrl(TWIG_REQUEST_URI);
             });
         },
